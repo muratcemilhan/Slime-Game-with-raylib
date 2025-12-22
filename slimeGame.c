@@ -1,132 +1,260 @@
 #include "raylib.h"
+#include <stdio.h> 
 
-// Sabitler: Ekran boyutlarını burada belirliyoruz.
+// --- SABİTLER ---
 #define EKRAN_YUKSEKLIK 600
 #define EKRAN_GENISLIK 1000
+#define MAX_PARTIKUL 100
+
+float arkaplanX = 0.0f;
+float zeminX = 0.0f; 
 
 // --- YAPI (STRUCT) TANIMLARI ---
-
-// Slime (Karakter) özelliklerini tutan yapı
 typedef struct {
-    Color renk;      // Karakterin rengi
-    Vector2 konum;   // Ekrandaki X ve Y koordinatı
-    Vector2 sekil;   // Genişlik ve Yükseklik bilgisi
-    Vector2 hiz;     // Hareket hızı (Yatay ve Dikey)
-    bool yerdeMi;    // Karakter yere basıyor mu? (Zıplama kontrolü için)
+    Vector2 konum;
+    Vector2 hiz;
+    float omur;     
+    float boyut;
+    bool aktif;     
+} Partikul;
+
+typedef struct {
+    Color renk;      
+    Vector2 konum;   
+    Vector2 sekil;   
+    Vector2 hiz;     
+    bool yerdeMi;    
 } Slime;
 
-// Zemin (Masa) özelliklerini tutan yapı
 typedef struct {
-    Vector2 konum;   // Masanın başladığı yer
-    Color renk;      // Masanın rengi
-    Vector2 boyut;   // Masanın genişliği ve yüksekliği
+    Vector2 konum;   
+    Color renk;      
+    Vector2 boyut;   
 } Masa;
 
-// Düşman (Rakip/Engel) özelliklerini tutan yapı
 typedef struct {
-    Vector2 konum;   // Engelin konumu
-    Vector2 boyut;   // Engelin boyutu
-    Color renk;      // Engelin rengi
-    bool aktif;      // Engel şu an ekranda aktif mi?
-    bool gecildi;    // Oyuncu bu engeli aştı mı? (Skor kontrolü)
+    Vector2 konum;   
+    Vector2 boyut;   
+    Color renk;      
+    bool aktif;      
+    bool gecildi;
+    int tip;         // 0 = Kütük, 1 = Kuş
+    int yon;         // 1 = Aşağı, -1 = Yukarı
 } Rakip;
 
 // --- GLOBAL DEĞİŞKENLER ---
-// Bu değişkenlere programın her yerinden erişilebilir.
 Slime slime;
 Masa masa;
-Rakip rakipler[5];      // Aynı anda ekranda olabilecek maksimum engel sayısı
-int score = 0;          // Oyuncunun puanı
-float oyunHizi = -3.0f; // Oyunun kayma hızı (Sola doğru gittiği için negatif)
-bool oyunAktif = false; // Oyunun oynanıp oynanmadığını kontrol eder
-bool oyunBitti = false; // Karakterin yanıp yanmadığını kontrol eder
+Rakip rakipler[5]; 
+Partikul partikuller[MAX_PARTIKUL];     
 
-// --- OYUNU BAŞLATMA VE SIFIRLAMA ---
-// Oyun ilk açıldığında veya 'R' tuşuna basıldığında bu fonksiyon çalışır.
-void OyunuSifirla() {
-    // 1. Masanın (Zeminin) ayarlanması
-    masa.konum = (Vector2){0, EKRAN_YUKSEKLIK / 3.0f * 2.0f}; // Ekranın alt kısmına yerleştir
-    masa.boyut = (Vector2){EKRAN_GENISLIK, 10}; // Ekran boyunca uzanan ince bir çizgi
-    masa.renk = BROWN;
+int score = 0;          
+int highScore = 0;      
+float oyunHizi = -4.0f; 
 
-    // 2. Slime (Karakter) ayarları
-    slime.renk = GREEN;
-    slime.sekil = (Vector2){30, 30}; // 30x30 piksel boyutunda
-    // Slime'ın konumu: Masanın Y konumundan slime'ın boyunu çıkararak tam üstüne oturtuyoruz.
-    slime.konum = (Vector2){100, masa.konum.y - slime.sekil.y}; 
-    slime.hiz = (Vector2){0, 0};
-    slime.yerdeMi = true; // Yerde başlıyor olarak işaretle
+bool oyunAktif = false; 
+bool oyunBitti = false; 
+bool oyunDuraklatildi = false; 
+bool muzikAcik = true; 
 
-    // 3. Rakiplerin (Engellerin) hazırlanması
-    oyunHizi = -3.0f;       // Hızı varsayılan değere döndür
-    int x = EKRAN_GENISLIK; // Engeller ekranın sağından gelmeye başlasın
-    
-    for (int i = 0; i < 5; i++) {
-        int gap = GetRandomValue(300, 450); // Engeller arası rastgele mesafe belirle
-        x += gap; // Bir sonraki engelin konumunu hesapla
-        
-        // Engelin boyutunu ve yerini ayarla
-        rakipler[i].boyut = (Vector2){20, (float)GetRandomValue(50, 80)};
-        // Engeli zemine (masaya) yapışık olacak şekilde konumlandır
-        rakipler[i].konum = (Vector2){(float)x, masa.konum.y - rakipler[i].boyut.y}; 
-        rakipler[i].renk = BLACK;
-        rakipler[i].aktif = true;
-        rakipler[i].gecildi = false;
+Sound ziplama;
+Music oyunmuzigi;
+Sound yuksekSkor; 
+Sound kaybetme;
+
+// Yerde koşarken efekt sıklığını kontrol etmek için sayaç
+int kosmaSayaci = 0;
+
+// --- YARDIMCI FONKSİYONLAR ---
+void YuksekSkoruYukle() {
+    FILE *dosya = fopen("rekor.txt", "r"); 
+    if (dosya != NULL) {
+        fscanf(dosya, "%d", &highScore); 
+        fclose(dosya); 
     }
-
-    score = 0;          // Skoru sıfırla
-    oyunBitti = false;  // Yanma durumunu kaldır
 }
 
-// --- KARAKTER HAREKET MANTIĞI ---
+void YuksekSkoruKaydet() {
+    FILE *dosya = fopen("rekor.txt", "w"); 
+    if (dosya != NULL) {
+        fprintf(dosya, "%d", highScore); 
+        fclose(dosya); 
+    }
+}
+
+// --- PARTİKÜL SİSTEMİ ---
+void PartikulSifirla() {
+    for(int i = 0; i < MAX_PARTIKUL; i++) {
+        partikuller[i].aktif = false;
+    }
+}
+
+// Birleştirilmiş Fonksiyon: İster 1 tane ister 10 tane toz çıkarabilirsin
+void TozEfektiOlustur(float x, float y, int miktar) {
+    int sayac = 0;
+    for (int i = 0; i < MAX_PARTIKUL; i++) {
+        if (!partikuller[i].aktif) {
+            partikuller[i].aktif = true;
+            partikuller[i].konum = (Vector2){x + GetRandomValue(-5, 10), y}; 
+            
+            // Eğer tek bir toz çıkıyorsa (koşma) daha yatay gitsin
+            if(miktar == 1) {
+                 partikuller[i].hiz.x = (float)GetRandomValue(-30, -10) / 10.0f; 
+                 partikuller[i].hiz.y = (float)GetRandomValue(-10, 0) / 10.0f;   
+            } else {
+                // Patlama efektinde her yöne dağılsın
+                 partikuller[i].hiz.x = (float)GetRandomValue(-20, 20) / 10.0f;
+                 partikuller[i].hiz.y = (float)GetRandomValue(-30, -10) / 10.0f;
+            }
+            
+            partikuller[i].omur = 1.0f;
+            partikuller[i].boyut = (float)GetRandomValue(3, 8);
+            
+            sayac++;
+            if (sayac >= miktar) break; 
+        }
+    }
+}
+
+void PartikulGuncelle() {
+    for (int i = 0; i < MAX_PARTIKUL; i++) {
+        if (partikuller[i].aktif) {
+            // Tozlar zeminle beraber kaysın
+            partikuller[i].konum.x += partikuller[i].hiz.x + oyunHizi; 
+            partikuller[i].konum.y += partikuller[i].hiz.y;
+            
+            partikuller[i].omur -= 0.04f; 
+            partikuller[i].boyut -= 0.1f; 
+
+            if (partikuller[i].omur <= 0 || partikuller[i].boyut <= 0) {
+                partikuller[i].aktif = false;
+            }
+        }
+    }
+}
+
+void PartikulCiz() {
+    for (int i = 0; i < MAX_PARTIKUL; i++) {
+        if (partikuller[i].aktif) {
+            DrawRectangle((int)partikuller[i].konum.x, (int)partikuller[i].konum.y, 
+                          (int)partikuller[i].boyut, (int)partikuller[i].boyut, 
+                          Fade(LIME, partikuller[i].omur)); 
+        }
+    }
+}
+
+// --- OYUN MANTIĞI ---
+void EngelOlustur(int index, float xKonumu) {
+    int rastgele = GetRandomValue(0, 100);
+    
+    if (rastgele < 30) { // KUŞ
+        rakipler[index].tip = 1; 
+        rakipler[index].boyut = (Vector2){40, 30}; 
+        rakipler[index].konum.y = masa.konum.y - 100; 
+        rakipler[index].yon = 1; 
+        rakipler[index].renk = RED; 
+    } else { // KÜTÜK
+        rakipler[index].tip = 0;
+        rakipler[index].boyut = (Vector2){30, (float)GetRandomValue(90, 110)};
+        rakipler[index].konum.y = masa.konum.y - rakipler[index].boyut.y;
+        rakipler[index].renk = RAYWHITE;
+    }
+
+    rakipler[index].konum.x = xKonumu;
+    rakipler[index].aktif = true;
+    rakipler[index].gecildi = false;
+}
+
+void OyunuSifirla() {
+    masa.konum = (Vector2){0, EKRAN_YUKSEKLIK / 3.0f * 2.0f}; 
+    masa.boyut = (Vector2){EKRAN_GENISLIK, 20}; 
+    masa.renk = BROWN;
+
+    slime.renk = GREEN;
+    slime.sekil = (Vector2){40, 40}; 
+    slime.konum = (Vector2){100, masa.konum.y - slime.sekil.y}; 
+    slime.hiz = (Vector2){0, 0};
+    slime.yerdeMi = true; 
+
+    oyunHizi = -4.0f;       
+    int x = EKRAN_GENISLIK; 
+    
+    for (int i = 0; i < 5; i++) {
+        int gap = GetRandomValue(300, 450); 
+        x += gap; 
+        EngelOlustur(i, (float)x); 
+    }
+    
+    StopMusicStream(oyunmuzigi);
+    PartikulSifirla(); 
+
+    score = 0;           
+    oyunBitti = false;
+    oyunDuraklatildi = false; 
+    arkaplanX = 0.0f;
+    zeminX = 0.0f;
+    kosmaSayaci = 0;
+}
+
 void SlimeHareket() {
-    // Yerçekimi uygulaması: Slime sürekli aşağı doğru hızlanır
     slime.konum.y += slime.hiz.y;
     slime.hiz.y += 0.6f; 
 
-    // Zemin ile çarpışma kontrolü
-    // Eğer slime masanın seviyesinin altına indiyse...
+    // Yere Çarpma Kontrolü
     if (slime.konum.y + slime.sekil.y >= masa.konum.y) {
-        slime.konum.y = masa.konum.y - slime.sekil.y; // Onu tekrar masanın üstüne koy
-        slime.hiz.y = 0; // Düşme hızını sıfırla
-        slime.yerdeMi = true; // Yere bastığını belirt
+        
+        // Havadan yere yeni iniyorsa BÜYÜK toz çıkar
+        if (slime.yerdeMi == false) {
+             TozEfektiOlustur(slime.konum.x, masa.konum.y, 15);
+        }
+          
+        slime.konum.y = masa.konum.y - slime.sekil.y; 
+        slime.hiz.y = 0; 
+        slime.yerdeMi = true; 
+
+        // Yerde koşarken arada sırada KÜÇÜK toz çıkar
+        kosmaSayaci++;
+        if(kosmaSayaci >= 5) {
+             TozEfektiOlustur(slime.konum.x, masa.konum.y, 2);
+             kosmaSayaci = 0;
+        }
+
     } else {
-        slime.yerdeMi = false; // Havada olduğunu belirt
+        slime.yerdeMi = false; 
+        kosmaSayaci = 0;
     }
 
-    // Zıplama kontrolü
-    // Space tuşuna basıldıysa VE karakter yerdeyse zıpla
+    // Zıplama
     if (IsKeyPressed(KEY_SPACE) && slime.yerdeMi) {
-        slime.hiz.y = -12.0f; // Yukarı doğru negatif hız ver
+        slime.hiz.y = -12.5f; 
+        PlaySound(ziplama); 
+        TozEfektiOlustur(slime.konum.x + 10, masa.konum.y, 10);
         slime.yerdeMi = false;
     }
 }
 
-// --- ENGEL YÖNETİMİ ---
 void RakipYonetimi() {
     for (int i = 0; i < 5; i++) {
         if (rakipler[i].aktif) {
-            // Engeli sola doğru kaydır
             rakipler[i].konum.x += oyunHizi;
+            
+            // Kuş Hareketi
+            if (rakipler[i].tip == 1) { 
+                rakipler[i].konum.y += rakipler[i].yon * 2.0f;
+                if (rakipler[i].konum.y < masa.konum.y - 140) rakipler[i].yon = 1;
+                if (rakipler[i].konum.y > masa.konum.y - 50) rakipler[i].yon = -1;
+            }
 
-            // Eğer engel ekranın solundan tamamen çıktıysa...
+            // Ekrandan çıkınca başa al
             if (rakipler[i].konum.x + rakipler[i].boyut.x < 0) {
-                // Ekrandaki en sağdaki (en uzaktaki) engeli bul
                 float maxX = 0;
                 for (int j = 0; j < 5; j++) {
-                    if (rakipler[j].konum.x > maxX) {
-                        maxX = rakipler[j].konum.x;
-                    }
+                    if (rakipler[j].konum.x > maxX) maxX = rakipler[j].konum.x;
                 }
-
-                // Ekrandan çıkan bu engeli alıp en arkaya (sağa) taşı
-                int gap = GetRandomValue(300, 500); // Rastgele yeni bir aralık ver
-                rakipler[i].konum.x = maxX + gap;
-                
-                // Engel her döndüğünde boyunu rastgele değiştir
-                rakipler[i].boyut.y = GetRandomValue(50, 80);
-                rakipler[i].konum.y = masa.konum.y - rakipler[i].boyut.y;
-                rakipler[i].gecildi = false; // Tekrar puan kazanılabilir hale getir
+                int seviye = score / 20; 
+                int ekMesafe = seviye * 30; 
+                int gap = GetRandomValue(300 + ekMesafe, 500 + ekMesafe); 
+                EngelOlustur(i, maxX + gap);
             }
         }
     }
@@ -134,89 +262,228 @@ void RakipYonetimi() {
 
 // --- ANA PROGRAM ---
 int main() {
-    // Raylib penceresini başlat
-    InitWindow(EKRAN_GENISLIK, EKRAN_YUKSEKLIK, "Slime Runner - Raylib");
-    SetTargetFPS(60); // Oyunu 60 FPS'e sabitle (Akıcılık için)
+    InitWindow(EKRAN_GENISLIK, EKRAN_YUKSEKLIK, "Slime Runner - Final");
+    InitAudioDevice();
+   
+    ziplama = LoadSound("ziplama.mp3");
+    oyunmuzigi = LoadMusicStream("oyunmuzigi.mp3");
+    yuksekSkor = LoadSound("yuksekskor.mp3"); 
+    kaybetme = LoadSound("kaybetme.mp3");
+    
+    SetTargetFPS(60); 
+    
+    YuksekSkoruYukle();
 
-    OyunuSifirla(); // Değişkenleri ilk değerlerine ayarla
-
-    // Pencere kapatılmadığı sürece döngüye gir
+    Texture2D arkaplan = LoadTexture("arkaplan.jpeg");
+    Texture2D toprak = LoadTexture("toprak.jpeg");
+    Texture2D slimeT = LoadTexture("slime.png");
+    Texture2D kutuk = LoadTexture("kutuk.png");
+    Texture2D kusT = LoadTexture("kus.png"); 
+    
+    PartikulSifirla();
+    OyunuSifirla(); 
+   
+    float slimeYaricap = slime.sekil.x / 2.0f - 2.0f;
+    
     while (!WindowShouldClose()) {
-        
-        // --- GÜNCELLEME (UPDATE) ---
-        // Oyun aktifse ve bitmemişse oyun mantığını çalıştır
-        if (oyunAktif && !oyunBitti) {
-            SlimeHareket();   // Karakter fiziği
-            RakipYonetimi();  // Engel hareketi
+        UpdateMusicStream(oyunmuzigi); 
 
-            // Çarpışma kontrolü için dikdörtgenleri oluştur
-            Rectangle slimeRec = {slime.konum.x, slime.konum.y, slime.sekil.x, slime.sekil.y};
+        // Müzik Aç/Kapa (V)
+        if(IsKeyPressed(KEY_V)){
+            if(muzikAcik == true){
+                PauseMusicStream(oyunmuzigi);
+                muzikAcik = false;
+            }
+            else { 
+                ResumeMusicStream(oyunmuzigi);
+                muzikAcik = true;
+            }
+        }
+
+        // Pause (P)
+        if (oyunAktif && !oyunBitti) {
+            if (IsKeyPressed(KEY_P)) {
+                oyunDuraklatildi = !oyunDuraklatildi;
+                if (oyunDuraklatildi) PauseMusicStream(oyunmuzigi); 
+                else if(muzikAcik) ResumeMusicStream(oyunmuzigi);
+            }
+        }
+
+        // --- OYUN DÖNGÜSÜ ---
+        if (oyunAktif && !oyunBitti && !oyunDuraklatildi) {
+            SlimeHareket();   
+            PartikulGuncelle(); 
+            RakipYonetimi();  
+
+            arkaplanX += oyunHizi * 0.2f; 
+            if (arkaplanX <= -1000) arkaplanX = 0.0f;
+
+            zeminX += oyunHizi;
+            if (zeminX <= -1000) zeminX = 0.0f;
             
+            // Çarpışma Kontrolleri
             for (int i = 0; i < 5; i++) {
+                Vector2 slimeMerkez = { 
+                    slime.konum.x + slime.sekil.x / 2.0f,  
+                    slime.konum.y + slime.sekil.y / 2.0f   
+                };
                 Rectangle rakipRec = {rakipler[i].konum.x, rakipler[i].konum.y, rakipler[i].boyut.x, rakipler[i].boyut.y};
 
-                // Slime bir engele çarptı mı?
-                if (CheckCollisionRecs(slimeRec, rakipRec)) {
-                    oyunBitti = true; // Oyunu bitir
-                }
-
-                // Slime engeli başarıyla geçti mi?
-                if (!rakipler[i].gecildi && slime.konum.x > rakipler[i].konum.x + rakipler[i].boyut.x) {
-                    score++; // Puanı artır
-                    rakipler[i].gecildi = true; // Bu engeli işaretle (tekrar puan vermesin)
+                if (CheckCollisionCircleRec(slimeMerkez, slimeYaricap, rakipRec)) {
+                    oyunBitti = true; 
+                    StopMusicStream(oyunmuzigi); 
                     
-                    // Zorluk ayarı: Her 10 puanda bir oyunu hızlandır
-                    if (score % 10 == 0) oyunHizi -= 1.0f;
+                    if (score > highScore) {
+                        highScore = score; 
+                        YuksekSkoruKaydet();
+                        PlaySound(yuksekSkor); 
+                    } else {
+                        PlaySound(kaybetme);
+                    }
+                }
+                
+                if (!rakipler[i].gecildi && slime.konum.x > rakipler[i].konum.x + rakipler[i].boyut.x) {
+                    score++;
+                    rakipler[i].gecildi = true;
+                    if (score % 10 == 0) oyunHizi -= 0.5f;
                 }
             }
-        } 
+        }
         else {
-            // Oyun bekleme modundaysa veya bitmişse tuşları kontrol et
-            
-            // Başlamak için SPACE tuşu kontrolü
-            if (!oyunBitti && IsKeyPressed(KEY_SPACE)) {
-                oyunAktif = true;
-            }
-            
-            // Kaybettikten sonra R tuşuna basılırsa ana menüye dön
-            if (oyunBitti && IsKeyPressed(KEY_R)) {
-                OyunuSifirla();     // Her şeyi sıfırla
-                oyunAktif = false;  // Oyunu hemen başlatma, menüde beklet
+            if (!oyunDuraklatildi) {
+                if (!oyunBitti && IsKeyPressed(KEY_SPACE)) {
+                    oyunAktif = true;
+                    if(muzikAcik) PlayMusicStream(oyunmuzigi);
+                }
+                if (oyunBitti && IsKeyPressed(KEY_R)) {
+                    OyunuSifirla();     
+                    oyunAktif = false;  
+                    arkaplanX = 0;
+                }
             }
         }
 
-        // --- ÇİZİM (DRAW) ---
+        // --- ÇİZİM ---
         BeginDrawing();
-        ClearBackground(RAYWHITE); // Arka planı temizle
-
-        // Zemini çiz
-        DrawRectangleV(masa.konum, masa.boyut, masa.renk);
-
-        // Tüm engelleri çiz
-        for (int i = 0; i < 5; i++) {
-            DrawRectangleV(rakipler[i].konum, rakipler[i].boyut, rakipler[i].renk);
-        }
-
-        // Karakteri çiz
-        DrawRectangleV(slime.konum, slime.sekil, slime.renk);
+        ClearBackground(RAYWHITE); 
         
-        // Skoru ekrana yaz
-        DrawText(TextFormat("Skor: %d", score), 20, 20, 20, BLUE);
+        // Arkaplan
+        Rectangle boyutArkaplan= {0, 0,(float)arkaplan.width,(float)arkaplan.height};
+        Rectangle konumArkaplan1= {arkaplanX, 0,1000,400};
+        DrawTexturePro(arkaplan,boyutArkaplan,konumArkaplan1,(Vector2){0,0},0.0f,RAYWHITE);
+        Rectangle konumArkaplan2= {arkaplanX+1000, 0,1000,400};
+        DrawTexturePro(arkaplan,boyutArkaplan,konumArkaplan2,(Vector2){0,0},0.0f,RAYWHITE);
+        
+        DrawRectangleV(masa.konum, masa.boyut, masa.renk);
+        
+        // Zemin
+        Rectangle boyutToprak={0,0,toprak.width,toprak.height};
+        Rectangle konumToprak1={zeminX, 400, 1000, 200};
+        DrawTexturePro(toprak,boyutToprak,konumToprak1,(Vector2){0,0},0.0f,RAYWHITE);
+        Rectangle konumToprak2={zeminX+1000, 400, 1000, 200};
+        DrawTexturePro(toprak,boyutToprak,konumToprak2,(Vector2){0,0},0.0f,RAYWHITE);
 
-        // Başlangıç Ekranı Yazısı
-        if (!oyunAktif && !oyunBitti) {
-            DrawText("BASLAMAK ICIN 'SPACE' TUSUNA BASIN", EKRAN_GENISLIK/2 - 200, EKRAN_YUKSEKLIK/2 - 50, 20, DARKGRAY);
+        // Engeller
+        for (int i = 0; i < 5; i++) {
+            if (rakipler[i].tip == 0) {
+                Rectangle boyutKutuk ={0,0,kutuk.width,kutuk.height};
+                Rectangle konumKutuk ={rakipler[i].konum.x,rakipler[i].konum.y,30,rakipler[i].boyut.y};
+                DrawTexturePro(kutuk,boyutKutuk,konumKutuk,(Vector2){0,0},0.0f,RAYWHITE);
+            } else {
+                Rectangle boyutKusKaynak = {0, 0, kusT.width, kusT.height};
+                Rectangle konumKus = {rakipler[i].konum.x, rakipler[i].konum.y, rakipler[i].boyut.x, rakipler[i].boyut.y};
+                DrawTexturePro(kusT, boyutKusKaynak, konumKus, (Vector2){0,0}, 0.0f, RAYWHITE);
+            }
         }
-        // Oyun Bitti Ekranı Yazıları
+
+        // Toz Efektleri
+        PartikulCiz();
+
+        // Karakter (Animasyonlu)
+        Rectangle boyutSlime={0,0,slimeT.width,slimeT.height};
+        if(slime.yerdeMi){
+            Rectangle KonumSlime={slime.konum.x,slime.konum.y,slime.sekil.x,slime.sekil.y};
+            DrawTexturePro(slimeT,boyutSlime,KonumSlime,(Vector2){0.0f},0.0f,RAYWHITE);
+        }
+        else{
+            // Zıplarken uzama efekti (Yere girmemesi için y-10)
+            Rectangle KonumSlime={slime.konum.x + 2.5f, slime.konum.y - 10.0f, slime.sekil.x-5.0f, slime.sekil.y+10.0f};
+            DrawTexturePro(slimeT,boyutSlime,KonumSlime,(Vector2){0.0f},0.0f,RAYWHITE);
+        }
+
+        // Arayüz
+        int kutuGenislik = 140;
+        int kutuYukseklik = 60;
+        int kutuX = EKRAN_GENISLIK - kutuGenislik - 10; 
+        int kutuY = 10; 
+        DrawRectangle(kutuX, kutuY, kutuGenislik, kutuYukseklik, Fade(RAYWHITE, 0.9f));
+        DrawRectangleLines(kutuX, kutuY, kutuGenislik, kutuYukseklik, LIGHTGRAY); 
+        DrawText(TextFormat("Skor: %d", score), kutuX + 10, kutuY + 10, 20, BLUE);
+        DrawText(TextFormat("Rekor: %d", highScore), kutuX + 10, kutuY + 35, 15, DARKGRAY);
+
+        DrawText("SPACE: Zipla", 10, EKRAN_YUKSEKLIK - 40, 20, WHITE);
+        DrawText("P: Durdur", 10, EKRAN_YUKSEKLIK - 20, 20, WHITE);
+        
+        if(muzikAcik) DrawText("Muzik: ACIK (V)", 10, EKRAN_YUKSEKLIK - 60, 20, GREEN);
+        else DrawText("Muzik: KAPALI (V)", 10, EKRAN_YUKSEKLIK - 60, 20, RED);
+
+        // Menüler
+        if (oyunDuraklatildi) {
+            DrawRectangle(0, 0, EKRAN_GENISLIK, EKRAN_YUKSEKLIK, Fade(BLACK, 0.4f));
+            int pPanelGen = 300;
+            int pPanelYuk = 100;
+            int pX = EKRAN_GENISLIK/2 - pPanelGen/2;
+            int pY = EKRAN_YUKSEKLIK/2 - pPanelYuk/2;
+            DrawRectangle(pX, pY, pPanelGen, pPanelYuk, Fade(RAYWHITE, 0.9f));
+            DrawRectangleLines(pX, pY, pPanelGen, pPanelYuk, DARKGRAY);
+            DrawText("DURAKLATILDI", EKRAN_GENISLIK/2 - MeasureText("DURAKLATILDI", 30)/2, pY + 20, 30, DARKGRAY);
+            DrawText("'P' ile Devam Et", EKRAN_GENISLIK/2 - MeasureText("'P' ile Devam Et", 20)/2, pY + 60, 20, GRAY);
+        }
+        else if (!oyunAktif && !oyunBitti) {
+            int panelGenislik = 450;
+            int panelYukseklik = 140;
+            int panelX = EKRAN_GENISLIK / 2 - panelGenislik / 2;
+            int panelY = EKRAN_YUKSEKLIK / 2 - panelYukseklik / 2;
+            DrawRectangle(panelX, panelY, panelGenislik, panelYukseklik, Fade(RAYWHITE, 0.85f));
+            DrawRectangleLines(panelX, panelY, panelGenislik, panelYukseklik, GRAY);
+            const char* baslik = "SLIME RUNNER";
+            const char* basla = "BASLAMAK ICIN 'SPACE' TUSUNA BASIN";
+            DrawText(baslik, EKRAN_GENISLIK/2 - MeasureText(baslik, 40)/2, panelY + 30, 40, DARKGREEN);
+            DrawText(basla, EKRAN_GENISLIK/2 - MeasureText(basla, 20)/2, panelY + 90, 20, DARKGRAY);
+        }   
         else if (oyunBitti) {
-            DrawText("KAYBETTINIZ!", EKRAN_GENISLIK/2 - 80, EKRAN_YUKSEKLIK/2 - 60, 30, RED);
-            DrawText(TextFormat("Son Skor: %d", score), EKRAN_GENISLIK/2 - 60, EKRAN_YUKSEKLIK/2 - 20, 20, BLACK);
-            DrawText("Basa donmek icin 'R' tusuna basin", EKRAN_GENISLIK/2 - 180, EKRAN_YUKSEKLIK/2 + 20, 20, DARKGRAY);
+            int panelGenislik = 400;
+            int panelYukseklik = 220;
+            int panelX = EKRAN_GENISLIK / 2 - panelGenislik / 2;
+            int panelY = EKRAN_YUKSEKLIK / 2 - panelYukseklik / 2;
+            DrawRectangle(panelX, panelY, panelGenislik, panelYukseklik, Fade(RAYWHITE, 0.85f));
+            DrawRectangleLines(panelX, panelY, panelGenislik, panelYukseklik, GRAY); 
+            const char* textSkor = TextFormat("Skorunuz: %d", score);
+            const char* textRekor = "YENI REKOR!";
+            const char* textRestart = "Basa donmek icin 'R' tusuna basin";
+            DrawText("KAYBETTINIZ!", EKRAN_GENISLIK/2 - MeasureText("KAYBETTINIZ!", 30)/2, panelY + 30, 30, RED);
+            DrawText(textSkor, EKRAN_GENISLIK/2 - MeasureText(textSkor, 20)/2, panelY + 80, 20, BLACK);
+            if (score >= highScore && score > 0) {
+                 DrawText(textRekor, EKRAN_GENISLIK/2 - MeasureText(textRekor, 25)/2, panelY + 110, 25, GOLD);
+            }
+            DrawText(textRestart, EKRAN_GENISLIK/2 - MeasureText(textRestart, 20)/2, panelY + 170, 20, DARKGRAY);
         }
 
-        EndDrawing(); // Çizimi bitir
+        EndDrawing(); 
     }
 
-    CloseWindow(); // Pencereyi kapat ve kaynakları serbest bırak
+    // --- TEMİZLİK ---
+    UnloadTexture(arkaplan);
+    UnloadTexture(toprak);
+    UnloadTexture(slimeT);
+    UnloadTexture(kutuk);
+    UnloadTexture(kusT); 
+    UnloadSound(ziplama);
+    UnloadSound(yuksekSkor); 
+    UnloadSound(kaybetme); 
+    UnloadMusicStream(oyunmuzigi);
+
+    CloseAudioDevice();
+    CloseWindow(); 
     return 0;
 }
