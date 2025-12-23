@@ -5,9 +5,7 @@
 #define EKRAN_YUKSEKLIK 600
 #define EKRAN_GENISLIK 1000
 #define MAX_PARTIKUL 100
-
-float arkaplanX = 0.0f;
-float zeminX = 0.0f; 
+#define SKOR_KAYIT_SAYISI 5 // Liderlik tablosunda kaç kişi olacak?
 
 // --- YAPI (STRUCT) TANIMLARI ---
 typedef struct {
@@ -49,8 +47,11 @@ Rakip rakipler[5];
 Partikul partikuller[MAX_PARTIKUL];     
 
 int score = 0;          
-int highScore = 0;      
+int liderlikTablosu[SKOR_KAYIT_SAYISI] = {0}; // YENİ: Top 5 skor dizisi
+
 float oyunHizi = -4.0f; 
+float arkaplanX = 0.0f;
+float zeminX = 0.0f; 
 
 bool oyunAktif = false; 
 bool oyunBitti = false; 
@@ -65,31 +66,58 @@ Sound kaybetme;
 // Yerde koşarken efekt sıklığını kontrol etmek için sayaç
 int kosmaSayaci = 0;
 
-// --- YARDIMCI FONKSİYONLAR ---
-void YuksekSkoruYukle() {
-    FILE *dosya = fopen("rekor.txt", "r"); 
+// --- YARDIMCI FONKSİYONLAR  ---
+
+void LiderlikTablosunuYukle() {
+    FILE *dosya = fopen("liderlik_tablosu.txt", "r");
     if (dosya != NULL) {
-        fscanf(dosya, "%d", &highScore); 
-        fclose(dosya); 
+        for (int i = 0; i < SKOR_KAYIT_SAYISI; i++) {
+            if (fscanf(dosya, "%d", &liderlikTablosu[i]) != 1) {
+                liderlikTablosu[i] = 0; // Okuma hatası olursa 0 yap
+            }
+        }
+        fclose(dosya);
     }
 }
 
-void YuksekSkoruKaydet() {
-    FILE *dosya = fopen("rekor.txt", "w"); 
+void LiderlikTablosunuKaydet() {
+    FILE *dosya = fopen("liderlik_tablosu.txt", "w");
     if (dosya != NULL) {
-        fprintf(dosya, "%d", highScore); 
-        fclose(dosya); 
+        for (int i = 0; i < SKOR_KAYIT_SAYISI; i++) {
+            fprintf(dosya, "%d\n", liderlikTablosu[i]);
+        }
+        fclose(dosya);
     }
 }
 
-// --- PARTİKÜL SİSTEMİ ---
+// Skoru listeye ekleyip kaydırma yapan fonksiyon
+void SkoruTabloyaIsle(int yeniSkor) {
+    for (int i = 0; i < SKOR_KAYIT_SAYISI; i++) {
+        // Eğer yeni skor, bu sıradaki skordan büyükse araya girer
+        if (yeniSkor > liderlikTablosu[i]) {
+            
+            // 1. Aşağıdakileri kaydır (En sondan başlayarak)
+            for (int k = SKOR_KAYIT_SAYISI - 1; k > i; k--) {
+                liderlikTablosu[k] = liderlikTablosu[k - 1];
+            }
+            
+            // 2. Yeni skoru yerleştir
+            liderlikTablosu[i] = yeniSkor;
+            
+            // 3. Kaydet ve çık
+            LiderlikTablosunuKaydet();
+            break; 
+        }
+    }
+}
+
+// --- PARTİKÜL SİSTEMİ (AYNI) ---
 void PartikulSifirla() {
     for(int i = 0; i < MAX_PARTIKUL; i++) {
         partikuller[i].aktif = false;
     }
 }
 
-// Birleştirilmiş Fonksiyon: İster 1 tane ister 10 tane toz çıkarabilirsin
 void TozEfektiOlustur(float x, float y, int miktar) {
     int sayac = 0;
     for (int i = 0; i < MAX_PARTIKUL; i++) {
@@ -97,12 +125,10 @@ void TozEfektiOlustur(float x, float y, int miktar) {
             partikuller[i].aktif = true;
             partikuller[i].konum = (Vector2){x + GetRandomValue(-5, 10), y}; 
             
-            // Eğer tek bir toz çıkıyorsa (koşma) daha yatay gitsin
             if(miktar == 1) {
                  partikuller[i].hiz.x = (float)GetRandomValue(-30, -10) / 10.0f; 
                  partikuller[i].hiz.y = (float)GetRandomValue(-10, 0) / 10.0f;   
             } else {
-                // Patlama efektinde her yöne dağılsın
                  partikuller[i].hiz.x = (float)GetRandomValue(-20, 20) / 10.0f;
                  partikuller[i].hiz.y = (float)GetRandomValue(-30, -10) / 10.0f;
             }
@@ -119,7 +145,6 @@ void TozEfektiOlustur(float x, float y, int miktar) {
 void PartikulGuncelle() {
     for (int i = 0; i < MAX_PARTIKUL; i++) {
         if (partikuller[i].aktif) {
-            // Tozlar zeminle beraber kaysın
             partikuller[i].konum.x += partikuller[i].hiz.x + oyunHizi; 
             partikuller[i].konum.y += partikuller[i].hiz.y;
             
@@ -133,15 +158,7 @@ void PartikulGuncelle() {
     }
 }
 
-void PartikulCiz() {
-    for (int i = 0; i < MAX_PARTIKUL; i++) {
-        if (partikuller[i].aktif) {
-            DrawRectangle((int)partikuller[i].konum.x, (int)partikuller[i].konum.y, 
-                          (int)partikuller[i].boyut, (int)partikuller[i].boyut, 
-                          Fade(LIME, partikuller[i].omur)); 
-        }
-    }
-}
+
 
 // --- OYUN MANTIĞI ---
 void EngelOlustur(int index, float xKonumu) {
@@ -150,12 +167,12 @@ void EngelOlustur(int index, float xKonumu) {
     if (rastgele < 30) { // KUŞ
         rakipler[index].tip = 1; 
         rakipler[index].boyut = (Vector2){40, 30}; 
-        rakipler[index].konum.y = masa.konum.y - 100; 
+        rakipler[index].konum.y = masa.konum.y - GetRandomValue(10,100); 
         rakipler[index].yon = 1; 
         rakipler[index].renk = RED; 
     } else { // KÜTÜK
         rakipler[index].tip = 0;
-        rakipler[index].boyut = (Vector2){30, (float)GetRandomValue(90, 110)};
+        rakipler[index].boyut = (Vector2){GetRandomValue(30,40), (float)GetRandomValue(90, 110)};
         rakipler[index].konum.y = masa.konum.y - rakipler[index].boyut.y;
         rakipler[index].renk = RAYWHITE;
     }
@@ -193,7 +210,6 @@ void OyunuSifirla() {
     oyunDuraklatildi = false; 
     arkaplanX = 0.0f;
     zeminX = 0.0f;
-    kosmaSayaci = 0;
 }
 
 void SlimeHareket() {
@@ -203,16 +219,14 @@ void SlimeHareket() {
     // Yere Çarpma Kontrolü
     if (slime.konum.y + slime.sekil.y >= masa.konum.y) {
         
-        // Havadan yere yeni iniyorsa BÜYÜK toz çıkar
         if (slime.yerdeMi == false) {
-             TozEfektiOlustur(slime.konum.x, masa.konum.y, 15);
+            TozEfektiOlustur(slime.konum.x, masa.konum.y, 15);
         }
           
         slime.konum.y = masa.konum.y - slime.sekil.y; 
         slime.hiz.y = 0; 
         slime.yerdeMi = true; 
 
-        // Yerde koşarken arada sırada KÜÇÜK toz çıkar
         kosmaSayaci++;
         if(kosmaSayaci >= 5) {
              TozEfektiOlustur(slime.konum.x, masa.konum.y, 2);
@@ -224,7 +238,6 @@ void SlimeHareket() {
         kosmaSayaci = 0;
     }
 
-    // Zıplama
     if (IsKeyPressed(KEY_SPACE) && slime.yerdeMi) {
         slime.hiz.y = -12.5f; 
         PlaySound(ziplama); 
@@ -238,14 +251,12 @@ void RakipYonetimi() {
         if (rakipler[i].aktif) {
             rakipler[i].konum.x += oyunHizi;
             
-            // Kuş Hareketi
             if (rakipler[i].tip == 1) { 
                 rakipler[i].konum.y += rakipler[i].yon * 2.0f;
                 if (rakipler[i].konum.y < masa.konum.y - 140) rakipler[i].yon = 1;
                 if (rakipler[i].konum.y > masa.konum.y - 50) rakipler[i].yon = -1;
             }
 
-            // Ekrandan çıkınca başa al
             if (rakipler[i].konum.x + rakipler[i].boyut.x < 0) {
                 float maxX = 0;
                 for (int j = 0; j < 5; j++) {
@@ -262,7 +273,7 @@ void RakipYonetimi() {
 
 // --- ANA PROGRAM ---
 int main() {
-    InitWindow(EKRAN_GENISLIK, EKRAN_YUKSEKLIK, "Slime Runner - Final");
+    InitWindow(EKRAN_GENISLIK, EKRAN_YUKSEKLIK, "Slime Runner");
     InitAudioDevice();
    
     ziplama = LoadSound("ziplama.mp3");
@@ -272,7 +283,7 @@ int main() {
     
     SetTargetFPS(60); 
     
-    YuksekSkoruYukle();
+    LiderlikTablosunuYukle(); // Başlangıçta listeyi yükle
 
     Texture2D arkaplan = LoadTexture("arkaplan.jpeg");
     Texture2D toprak = LoadTexture("toprak.jpeg");
@@ -280,7 +291,6 @@ int main() {
     Texture2D kutuk = LoadTexture("kutuk.png");
     Texture2D kusT = LoadTexture("kus.png"); 
     
-    PartikulSifirla();
     OyunuSifirla(); 
    
     float slimeYaricap = slime.sekil.x / 2.0f - 2.0f;
@@ -288,7 +298,6 @@ int main() {
     while (!WindowShouldClose()) {
         UpdateMusicStream(oyunmuzigi); 
 
-        // Müzik Aç/Kapa (V)
         if(IsKeyPressed(KEY_V)){
             if(muzikAcik == true){
                 PauseMusicStream(oyunmuzigi);
@@ -300,7 +309,6 @@ int main() {
             }
         }
 
-        // Pause (P)
         if (oyunAktif && !oyunBitti) {
             if (IsKeyPressed(KEY_P)) {
                 oyunDuraklatildi = !oyunDuraklatildi;
@@ -333,9 +341,10 @@ int main() {
                     oyunBitti = true; 
                     StopMusicStream(oyunmuzigi); 
                     
-                    if (score > highScore) {
-                        highScore = score; 
-                        YuksekSkoruKaydet();
+                    // --- YENİ KAYIT SİSTEMİ ---
+                    // Eğer mevcut skor, listedeki 5. (en kötü) skordan büyükse listeye girer
+                    if (score > liderlikTablosu[SKOR_KAYIT_SAYISI - 1]) {
+                        SkoruTabloyaIsle(score);
                         PlaySound(yuksekSkor); 
                     } else {
                         PlaySound(kaybetme);
@@ -396,17 +405,21 @@ int main() {
             }
         }
 
-        // Toz Efektleri
-        PartikulCiz();
+        //partikül
+    for (int i = 0; i < MAX_PARTIKUL; i++) {
+        if (partikuller[i].aktif) {
+            DrawRectangle((int)partikuller[i].konum.x, (int)partikuller[i].konum.y, (int)partikuller[i].boyut, (int)partikuller[i].boyut, Fade(LIME, partikuller[i].omur)); 
+        }
+    }
 
-        // Karakter (Animasyonlu)
+
+        // Karakter
         Rectangle boyutSlime={0,0,slimeT.width,slimeT.height};
         if(slime.yerdeMi){
             Rectangle KonumSlime={slime.konum.x,slime.konum.y,slime.sekil.x,slime.sekil.y};
             DrawTexturePro(slimeT,boyutSlime,KonumSlime,(Vector2){0.0f},0.0f,RAYWHITE);
         }
         else{
-            // Zıplarken uzama efekti (Yere girmemesi için y-10)
             Rectangle KonumSlime={slime.konum.x + 2.5f, slime.konum.y - 10.0f, slime.sekil.x-5.0f, slime.sekil.y+10.0f};
             DrawTexturePro(slimeT,boyutSlime,KonumSlime,(Vector2){0.0f},0.0f,RAYWHITE);
         }
@@ -417,9 +430,10 @@ int main() {
         int kutuX = EKRAN_GENISLIK - kutuGenislik - 10; 
         int kutuY = 10; 
         DrawRectangle(kutuX, kutuY, kutuGenislik, kutuYukseklik, Fade(RAYWHITE, 0.9f));
-        DrawRectangleLines(kutuX, kutuY, kutuGenislik, kutuYukseklik, LIGHTGRAY); 
+        DrawRectangleLines(kutuX, kutuY, kutuGenislik, kutuYukseklik, LIME); 
         DrawText(TextFormat("Skor: %d", score), kutuX + 10, kutuY + 10, 20, BLUE);
-        DrawText(TextFormat("Rekor: %d", highScore), kutuX + 10, kutuY + 35, 15, DARKGRAY);
+        // Ekranda her zaman EN İYİ (1.) skoru gösterelim
+        DrawText(TextFormat("Rekor: %d", liderlikTablosu[0]), kutuX + 10, kutuY + 35, 15, DARKGRAY);
 
         DrawText("SPACE: Zipla", 10, EKRAN_YUKSEKLIK - 40, 20, WHITE);
         DrawText("P: Durdur", 10, EKRAN_YUKSEKLIK - 20, 20, WHITE);
@@ -452,21 +466,34 @@ int main() {
             DrawText(basla, EKRAN_GENISLIK/2 - MeasureText(basla, 20)/2, panelY + 90, 20, DARKGRAY);
         }   
         else if (oyunBitti) {
+            // --- YENİ LİDERLİK TABLOSU EKRANI ---
             int panelGenislik = 400;
-            int panelYukseklik = 220;
+            int panelYukseklik = 350; 
             int panelX = EKRAN_GENISLIK / 2 - panelGenislik / 2;
             int panelY = EKRAN_YUKSEKLIK / 2 - panelYukseklik / 2;
-            DrawRectangle(panelX, panelY, panelGenislik, panelYukseklik, Fade(RAYWHITE, 0.85f));
+
+            DrawRectangle(panelX, panelY, panelGenislik, panelYukseklik, Fade(RAYWHITE, 0.95f));
             DrawRectangleLines(panelX, panelY, panelGenislik, panelYukseklik, GRAY); 
-            const char* textSkor = TextFormat("Skorunuz: %d", score);
-            const char* textRekor = "YENI REKOR!";
-            const char* textRestart = "Basa donmek icin 'R' tusuna basin";
-            DrawText("KAYBETTINIZ!", EKRAN_GENISLIK/2 - MeasureText("KAYBETTINIZ!", 30)/2, panelY + 30, 30, RED);
-            DrawText(textSkor, EKRAN_GENISLIK/2 - MeasureText(textSkor, 20)/2, panelY + 80, 20, BLACK);
-            if (score >= highScore && score > 0) {
-                 DrawText(textRekor, EKRAN_GENISLIK/2 - MeasureText(textRekor, 25)/2, panelY + 110, 25, GOLD);
+            
+            DrawText("OYUN BITTI", panelX + 110, panelY + 20, 30, RED);
+            DrawText(TextFormat("Senin Skorun: %d", score), panelX + 120, panelY + 60, 20, BLACK);
+            
+            DrawText("- LIDERLIK TABLOSU -", panelX + 100, panelY + 100, 20, DARKGREEN);
+            
+            // Tabloyu Çizdir
+            for (int i = 0; i < SKOR_KAYIT_SAYISI; i++) {
+                Color yaziRengi = DARKGRAY;
+                // Şu anki skorumuz listedeyse onu altın rengi yapalım
+                if (liderlikTablosu[i] == score && score != 0) yaziRengi = GOLD; 
+
+                DrawText(TextFormat("%d.  .........  %d", i + 1, liderlikTablosu[i]), 
+                         panelX + 120, 
+                         panelY + 140 + (i * 30), // Her satırda 30px aşağı in
+                         20, 
+                         yaziRengi);
             }
-            DrawText(textRestart, EKRAN_GENISLIK/2 - MeasureText(textRestart, 20)/2, panelY + 170, 20, DARKGRAY);
+
+            DrawText("Basa donmek icin 'R'", panelX + 100, panelY + 310, 20, LIGHTGRAY);
         }
 
         EndDrawing(); 
